@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"log" // Add this import
 	"os"
 	"strings"
 
 	"github.com/vishal151/compression/internal/huffman"
+
+	"encoding/binary"
 
 	"github.com/spf13/cobra"
 )
@@ -25,6 +29,7 @@ func init() {
 	rootCmd.AddCommand(treeCmd)
 	rootCmd.AddCommand(codesCmd)
 	rootCmd.AddCommand(encodeCmd)
+	rootCmd.AddCommand(decodeCmd)
 	frequencyCmd.Flags().StringVarP(&inputFile, "input", "i", "", "Input file path")
 	frequencyCmd.MarkFlagRequired("input")
 	treeCmd.Flags().StringVarP(&inputFile, "input", "i", "", "Input file path")
@@ -36,6 +41,11 @@ func init() {
 	encodeCmd.Flags().BoolVarP(&useTree, "use-tree", "t", false, "Use tree structure instead of frequency table")
 	encodeCmd.MarkFlagRequired("input")
 	encodeCmd.MarkFlagRequired("output")
+	decodeCmd.Flags().StringVarP(&inputFile, "input", "i", "", "Input file path")
+	decodeCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path")
+	decodeCmd.Flags().BoolVarP(&useTree, "use-tree", "t", false, "Use tree structure instead of frequency table")
+	decodeCmd.MarkFlagRequired("input")
+	decodeCmd.MarkFlagRequired("output")
 }
 
 var frequencyCmd = &cobra.Command{
@@ -119,49 +129,106 @@ var encodeCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		input, err := os.ReadFile(inputFile)
 		if err != nil {
-			fmt.Printf("Error reading input file: %v\n", err)
-			return
+			log.Fatalf("Error reading input file: %v", err)
 		}
 
-		frequencies, err := huffman.CountFrequencies(strings.NewReader(string(input)))
+		frequencies, err := huffman.CountFrequencies(bytes.NewReader(input))
 		if err != nil {
-			fmt.Printf("Error counting frequencies: %v\n", err)
-			return
+			log.Fatalf("Error counting frequencies: %v", err)
 		}
 
 		root := huffman.BuildHuffmanTree(frequencies)
 		codes := huffman.GenerateHuffmanCodes(root)
-
 		encoded := huffman.EncodeText(input, codes)
 
 		outputFile, err := os.Create(outputFile)
 		if err != nil {
-			fmt.Printf("Error creating output file: %v\n", err)
-			return
+			log.Fatalf("Error creating output file: %v", err)
 		}
 		defer outputFile.Close()
 
+		if err := binary.Write(outputFile, binary.LittleEndian, useTree); err != nil {
+			log.Fatalf("Error writing use-tree flag: %v", err)
+		}
+
 		if useTree {
 			if err := huffman.WriteTree(root, outputFile); err != nil {
-				fmt.Printf("Error writing tree: %v\n", err)
-				return
+				log.Fatalf("Error writing tree: %v", err)
 			}
 		} else {
 			if err := huffman.WriteFrequencyTable(frequencies, outputFile); err != nil {
-				fmt.Printf("Error writing frequency table: %v\n", err)
-				return
+				log.Fatalf("Error writing frequency table: %v", err)
 			}
 		}
 
+		if err := binary.Write(outputFile, binary.LittleEndian, uint32(root.Freq)); err != nil {
+			log.Fatalf("Error writing total frequency: %v", err)
+		}
+
 		if _, err := outputFile.Write(encoded); err != nil {
-			fmt.Printf("Error writing encoded data: %v\n", err)
-			return
+			log.Fatalf("Error writing encoded data: %v", err)
 		}
 
 		fmt.Printf("File encoded successfully. Output written to %s\n", outputFile.Name())
 		fmt.Printf("Original size: %d bytes\n", len(input))
 		fmt.Printf("Compressed size: %d bytes\n", len(encoded))
 		fmt.Printf("Compression ratio: %.2f%%\n", float64(len(encoded))/float64(len(input))*100)
+	},
+}
+
+var decodeCmd = &cobra.Command{
+	Use:   "decode",
+	Short: "Decode a Huffman-encoded file",
+	Run: func(cmd *cobra.Command, args []string) {
+		inputData, err := os.ReadFile(inputFile)
+		if err != nil {
+			log.Fatalf("Error reading input file: %v", err)
+		}
+
+		reader := bytes.NewReader(inputData)
+
+		var usedTree bool
+		if err := binary.Read(reader, binary.LittleEndian, &usedTree); err != nil {
+			log.Fatalf("Error reading use-tree flag: %v", err)
+		}
+
+		var root *huffman.Node
+		if usedTree {
+			root, err = huffman.ReadTree(reader)
+			if err != nil {
+				log.Fatalf("Error reading Huffman tree: %v", err)
+			}
+		} else {
+			frequencies, err := huffman.ReadFrequencyTable(reader)
+			if err != nil {
+				log.Fatalf("Error reading frequency table: %v", err)
+			}
+			root = huffman.BuildHuffmanTree(frequencies)
+		}
+
+		var totalFreq uint32
+		if err := binary.Read(reader, binary.LittleEndian, &totalFreq); err != nil {
+			log.Fatalf("Error reading total frequency: %v", err)
+		}
+		root.Freq = int(totalFreq)
+
+		encodedData := inputData[len(inputData)-reader.Len():]
+		decoded, err := huffman.DecodeText(encodedData, root)
+		if err != nil {
+			log.Fatalf("Error decoding text: %v", err)
+		}
+
+		// Preserve line endings
+		decoded = bytes.ReplaceAll(decoded, []byte{'\r', '\n'}, []byte{'\n'})
+
+		err = os.WriteFile(outputFile, decoded, 0644)
+		if err != nil {
+			log.Fatalf("Error writing output file: %v", err)
+		}
+
+		fmt.Printf("File decoded successfully. Output written to %s\n", outputFile)
+		fmt.Printf("Compressed size: %d bytes\n", len(inputData))
+		fmt.Printf("Decompressed size: %d bytes\n", len(decoded))
 	},
 }
 
