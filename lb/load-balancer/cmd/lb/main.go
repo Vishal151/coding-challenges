@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,16 +9,26 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishal151/load-balancer/internal/balancer"
+	"golang.org/x/time/rate"
 )
 
+type Backend struct {
+	*balancer.Backend
+	limiter             *rate.Limiter
+	consecutiveFailures int
+	lastFailure         time.Time
+}
+
 type LoadBalancer struct {
-	backends  []*balancer.Backend
+	backends  []*Backend
 	algorithm balancer.Algorithm
+	mu        sync.Mutex
 }
 
 var (
@@ -44,10 +55,13 @@ func init() {
 }
 
 func NewLoadBalancer(backends []string, algo string) *LoadBalancer {
-	var be []*balancer.Backend
+	var be []*Backend
 	for _, backend := range backends {
 		url, _ := url.Parse(backend)
-		be = append(be, &balancer.Backend{URL: url, Healthy: true})
+		be = append(be, &Backend{
+			Backend: &balancer.Backend{URL: url, Healthy: true},
+			limiter: rate.NewLimiter(rate.Limit(100), 200), // 100 requests per second, burst of 200
+		})
 	}
 
 	var algorithm balancer.Algorithm
@@ -59,14 +73,40 @@ func NewLoadBalancer(backends []string, algo string) *LoadBalancer {
 	case "ip-hash":
 		algorithm = &balancer.IPHash{}
 	default:
+		log.Printf("Unknown algorithm '%s', falling back to round-robin", algo)
 		algorithm = balancer.NewRoundRobin()
 	}
 
 	return &LoadBalancer{backends: be, algorithm: algorithm}
 }
 
-func (lb *LoadBalancer) NextBackend() *balancer.Backend {
-	return lb.algorithm.NextBackend(lb.backends)
+func (lb *LoadBalancer) NextBackend(r *http.Request) *Backend {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	backend := lb.algorithm.NextBackend(lb.getHealthyBackends(), r)
+	if backend == nil {
+		return nil
+	}
+	return lb.findBackendByURL(backend.URL)
+}
+
+func (lb *LoadBalancer) getHealthyBackends() []*balancer.Backend {
+	var healthy []*balancer.Backend
+	for _, b := range lb.backends {
+		if b.IsHealthy() {
+			healthy = append(healthy, b.Backend)
+		}
+	}
+	return healthy
+}
+
+func (lb *LoadBalancer) findBackendByURL(url *url.URL) *Backend {
+	for _, b := range lb.backends {
+		if b.URL.String() == url.String() {
+			return b
+		}
+	}
+	return nil
 }
 
 func (lb *LoadBalancer) HealthCheck() {
@@ -78,14 +118,24 @@ func (lb *LoadBalancer) HealthCheck() {
 			backend.SetHealth(alive)
 			if !alive {
 				status = "down"
+				backend.consecutiveFailures++
+				backend.lastFailure = time.Now()
+			} else {
+				backend.consecutiveFailures = 0
 			}
 			log.Printf("Backend %s health check: %s\n", backend.URL, status)
+
+			// Circuit breaking logic
+			if backend.consecutiveFailures >= 3 && time.Since(backend.lastFailure) < 1*time.Minute {
+				backend.SetHealth(false)
+				log.Printf("Circuit breaker tripped for backend %s\n", backend.URL)
+			}
 		}
 	}
 }
 
 func isBackendAlive(u *url.URL) bool {
-	resp, err := http.Head(u.String() + "/health")
+	resp, err := http.Get(u.String() + "/health")
 	if err != nil {
 		log.Printf("Health check error for %s: %v\n", u, err)
 		return false
@@ -95,6 +145,9 @@ func isBackendAlive(u *url.URL) bool {
 }
 
 func main() {
+	algorithm := flag.String("algorithm", "round-robin", "Load balancing algorithm (round-robin, least-connections, ip-hash)")
+	flag.Parse()
+
 	backendURLs := strings.Split(os.Getenv("BACKEND_URLS"), ",")
 	if len(backendURLs) == 0 {
 		backendURLs = []string{
@@ -124,7 +177,7 @@ func main() {
 		log.Fatal("No valid backend URLs provided")
 	}
 
-	lb := NewLoadBalancer(validBackendURLs, "round-robin")
+	lb := NewLoadBalancer(validBackendURLs, *algorithm)
 
 	go lb.HealthCheck()
 
@@ -132,9 +185,15 @@ func main() {
 		dump, _ := httputil.DumpRequest(r, false)
 		fmt.Printf("Received request from %s\n%s\n", r.RemoteAddr, string(dump))
 
-		backend := lb.NextBackend()
+		backend := lb.NextBackend(r)
 		if backend == nil {
 			http.Error(w, "No healthy backends available", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Rate limiting
+		if !backend.limiter.Allow() {
+			http.Error(w, "Too many requests", http.StatusTooManyRequests)
 			return
 		}
 
@@ -148,6 +207,10 @@ func main() {
 
 		fmt.Printf("Request forwarded to backend server: %s\n\n", backend.URL)
 	})
+
+	// Serve static files
+	fs := http.FileServer(http.Dir("cmd/lb/static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
 	// Add Prometheus metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())

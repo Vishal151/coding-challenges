@@ -24,7 +24,13 @@ func TestLoadBalancer(t *testing.T) {
 	// Test round-robin
 	expectedPorts := []int{8081, 8082, 8081, 8082}
 	for i, expectedPort := range expectedPorts {
-		backend := lb.NextBackend()
+		// Create a dummy request
+		req, err := http.NewRequest("GET", "/", nil)
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+
+		backend := lb.NextBackend(req)
 		if backend == nil {
 			t.Fatalf("Expected a backend, got nil")
 		}

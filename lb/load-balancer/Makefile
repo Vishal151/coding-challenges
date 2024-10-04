@@ -1,4 +1,4 @@
-.PHONY: build run-lb run-be test docker-build docker-run clean generate-cert run-all
+.PHONY: build run-lb run-be test docker-build docker-run clean generate-cert run-all run-lb-with-ui
 
 build:
 	go build -o bin/lb cmd/lb/main.go
@@ -24,6 +24,10 @@ run-all: build
 	@echo "Starting load balancer..."
 	BACKEND_URLS=http://localhost:8081,http://localhost:8082 ./bin/lb
 
+run-lb-with-ui: build
+	@echo "Starting load balancer with web UI..."
+	@BACKEND_URLS=http://localhost:8081,http://localhost:8082 ./bin/lb
+
 test:
 	go test ./...
 
@@ -45,3 +49,15 @@ build-loadtest:
 
 run-loadtest: build-loadtest
 	./bin/loadtest -url http://localhost:8080 -c 10 -n 1000
+
+run-lb-round-robin: build
+	@echo "Starting load balancer with round-robin algorithm..."
+	@BACKEND_URLS=http://localhost:8081,http://localhost:8082 ./bin/lb -algorithm round-robin
+
+run-lb-least-connections: build
+	@echo "Starting load balancer with least connections algorithm..."
+	@BACKEND_URLS=http://localhost:8081,http://localhost:8082 ./bin/lb -algorithm least-connections
+
+run-lb-ip-hash: build
+	@echo "Starting load balancer with IP hash algorithm..."
+	@BACKEND_URLS=http://localhost:8081,http://localhost:8082 ./bin/lb -algorithm ip-hash

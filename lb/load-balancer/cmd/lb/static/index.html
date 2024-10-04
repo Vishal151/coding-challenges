@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Load Balancer Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>Load Balancer Dashboard</h1>
+    <div>
+        <canvas id="requestsChart"></canvas>
+    </div>
+    <div>
+        <canvas id="latencyChart"></canvas>
+    </div>
+    <script>
+        let requestsChart, latencyChart;
+        const backends = ['http://localhost:8081', 'http://localhost:8082'];
+
+        function fetchMetrics() {
+            fetch('/metrics')
+                .then(response => response.text())
+                .then(data => {
+                    const metrics = parsePrometheusMetrics(data);
+                    updateCharts(metrics);
+                });
+        }
+
+        function parsePrometheusMetrics(data) {
+            const lines = data.split('\n');
+            const metrics = {};
+            lines.forEach(line => {
+                if (!line.startsWith('#') && line.includes(' ')) {
+                    const [key, value] = line.split(' ');
+                    metrics[key] = parseFloat(value);
+                }
+            });
+            return metrics;
+        }
+
+        function updateCharts(metrics) {
+            // Update requests chart
+            const requestsData = backends.map(backend => 
+                metrics[`http_requests_total{backend="${backend}"}`] || 0
+            );
+            requestsChart.data.datasets[0].data = requestsData;
+            requestsChart.update();
+
+            // Update latency chart
+            const latencyData = backends.map(backend => 
+                metrics[`http_request_duration_seconds_sum{backend="${backend}"}`] / 
+                (metrics[`http_request_duration_seconds_count{backend="${backend}"}`] || 1)
+            );
+            latencyChart.data.labels.push(new Date().toLocaleTimeString());
+            latencyChart.data.datasets.forEach((dataset, i) => {
+                dataset.data.push(latencyData[i]);
+                if (dataset.data.length > 20) {
+                    dataset.data.shift();
+                    latencyChart.data.labels.shift();
+                }
+            });
+            latencyChart.update();
+        }
+
+        // Fetch metrics every 5 seconds
+        setInterval(fetchMetrics, 5000);
+
+        // Initialize charts
+        requestsChart = new Chart(document.getElementById('requestsChart'), {
+            type: 'bar',
+            data: {
+                labels: backends,
+                datasets: [{
+                    label: 'Requests',
+                    data: [0, 0],
+                    backgroundColor: ['rgba(75, 192, 192, 0.6)', 'rgba(153, 102, 255, 0.6)']
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+
+        latencyChart = new Chart(document.getElementById('latencyChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: backends.map((backend, i) => ({
+                    label: `Backend ${i + 1} Latency`,
+                    data: [],
+                    borderColor: i === 0 ? 'rgba(75, 192, 192, 1)' : 'rgba(153, 102, 255, 1)',
+                    fill: false
+                }))
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Latency (seconds)'
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
