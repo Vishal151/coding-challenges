@@ -1,8 +1,10 @@
 package cutter
 
 import (
+	"io"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -127,7 +129,8 @@ func TestCutByFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := CutByFields(tt.input, tt.fieldSpec, tt.delimiter, tt.onlyDelimited)
+			reader := strings.NewReader(tt.input)
+			result, err := CutByFields(reader, tt.fieldSpec, tt.delimiter, tt.onlyDelimited)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CutByFields() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -183,13 +186,20 @@ func TestReadFile(t *testing.T) {
 			}
 
 			// Test ReadFile function
-			result, err := ReadFile(tmpfile.Name())
+			reader, err := ReadFile(tmpfile.Name())
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ReadFile() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !reflect.DeepEqual(result, tt.expected) {
-				t.Errorf("ReadFile() = %v, want %v", result, tt.expected)
+			if !tt.wantErr {
+				content, err := io.ReadAll(reader)
+				if err != nil {
+					t.Errorf("Failed to read from reader: %v", err)
+					return
+				}
+				if string(content) != tt.expected {
+					t.Errorf("ReadFile() = %v, want %v", string(content), tt.expected)
+				}
 			}
 		})
 	}
@@ -322,7 +332,54 @@ func TestCutByBytes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := CutByBytes(tt.input, tt.byteSpec)
+			reader := strings.NewReader(tt.input)
+			result, err := CutByBytes(reader, tt.byteSpec)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CutByBytes() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if result != tt.expected {
+				t.Errorf("CutByBytes() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCutByBytesEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		byteSpec string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "Overlapping ranges with different start",
+			input:    "abcdefg\nhijklmn",
+			byteSpec: "1-3,2-4,3-5",
+			expected: "abcde\nhijkl\n",
+			wantErr:  false,
+		},
+		{
+			name:     "Range exceeding line length",
+			input:    "abc\ndefg",
+			byteSpec: "2-10",
+			expected: "bc\nefg\n",
+			wantErr:  false,
+		},
+		{
+			name:     "Open-ended range from middle",
+			input:    "abcdefg\nhijklmn",
+			byteSpec: "3-",
+			expected: "cdefg\njklmn\n",
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := strings.NewReader(tt.input)
+			result, err := CutByBytes(reader, tt.byteSpec)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CutByBytes() error = %v, wantErr %v", err, tt.wantErr)
 				return

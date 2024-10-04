@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -17,20 +18,26 @@ var rootCmd = &cobra.Command{
 	Use:   "cut-tool [file]",
 	Short: "A cut tool implementation",
 	Long:  `A cut tool implementation for the coding challenge at https://codingchallenges.fyi/challenges/challenge-cut`,
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		filename := args[0]
-		content, err := cutter.ReadFile(filename)
-		if err != nil {
-			fmt.Println("Error reading file:", err)
-			os.Exit(1)
+		var input io.Reader
+		var err error
+
+		if len(args) == 0 {
+			input = os.Stdin
+		} else {
+			input, err = cutter.ReadFile(args[0])
+			if err != nil {
+				fmt.Println("Error reading file:", err)
+				os.Exit(1)
+			}
 		}
 
 		var result string
 		if fields != "" {
-			result, err = cutter.CutByFields(content, fields, delimiter, onlyDelimited)
+			result, err = cutter.CutByFields(input, fields, delimiter, onlyDelimited)
 		} else if bytes != "" {
-			result, err = cutter.CutByBytes(content, bytes)
+			result, err = cutter.CutByBytes(input, bytes)
 		} else {
 			fmt.Println("Error: either -f or -b flag must be specified")
 			os.Exit(1)

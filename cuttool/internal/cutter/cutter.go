@@ -3,6 +3,7 @@ package cutter
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -10,15 +11,14 @@ import (
 )
 
 // CutByFields cuts the input by fields
-// Step 2: Implement cutting by fields, including ranges and lists
-func CutByFields(input string, fieldSpec string, delimiter string, onlyDelimited bool) (string, error) {
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	var result strings.Builder
-
+func CutByFields(r io.Reader, fieldSpec string, delimiter string, onlyDelimited bool) (string, error) {
 	fields, err := parseFieldSpec(fieldSpec)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %s", ErrInvalidFieldSpec, err)
 	}
+
+	var result strings.Builder
+	scanner := bufio.NewScanner(r)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -35,6 +35,48 @@ func CutByFields(input string, fieldSpec string, delimiter string, onlyDelimited
 		}
 
 		result.WriteString(strings.Join(selectedParts, delimiter) + "\n")
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("error reading input: %w", err)
+	}
+
+	return result.String(), nil
+}
+
+// CutByBytes cuts the input by byte ranges
+func CutByBytes(r io.Reader, byteSpec string) (string, error) {
+	ranges, err := parseByteSpec(byteSpec)
+	if err != nil {
+		return "", err
+	}
+
+	var result strings.Builder
+	scanner := bufio.NewScanner(r)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var selectedBytes []byte
+
+		for i := 0; i < len(line); i++ {
+			selected := false
+			for _, r := range ranges {
+				start, end := r[0]-1, r[1]-1 // Convert to 0-based index
+				if end == -2 {               // -1 becomes -2 after subtracting 1
+					end = len(line) - 1
+				}
+				if i >= start && i <= end {
+					selected = true
+					break
+				}
+			}
+			if selected {
+				selectedBytes = append(selectedBytes, line[i])
+			}
+		}
+
+		result.Write(selectedBytes)
+		result.WriteByte('\n')
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -89,50 +131,6 @@ func parseFieldSpec(fieldSpec string) ([]int, error) {
 	return uniqueFields, nil
 }
 
-// CutByBytes cuts the input by byte ranges
-// Step 3: Implement cutting by byte ranges
-func CutByBytes(input string, byteSpec string) (string, error) {
-	ranges, err := parseByteSpec(byteSpec)
-	if err != nil {
-		return "", err
-	}
-
-	var result strings.Builder
-	scanner := bufio.NewScanner(strings.NewReader(input))
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		lineBytes := []byte(line)
-		selectedBytes := make([]bool, len(lineBytes))
-
-		for _, r := range ranges {
-			start, end := r[0], r[1]
-			if start < 1 {
-				start = 1
-			}
-			if end == -1 || end > len(lineBytes) {
-				end = len(lineBytes)
-			}
-			for i := start - 1; i < end && i < len(lineBytes); i++ {
-				selectedBytes[i] = true
-			}
-		}
-
-		for i, selected := range selectedBytes {
-			if selected {
-				result.WriteByte(lineBytes[i])
-			}
-		}
-		result.WriteString("\n")
-	}
-
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading input: %w", err)
-	}
-
-	return result.String(), nil
-}
-
 // parseByteSpec parses the byte specification string into a sorted list of byte ranges
 func parseByteSpec(byteSpec string) ([][2]int, error) {
 	var ranges [][2]int
@@ -180,10 +178,15 @@ func parseByteSpec(byteSpec string) ([][2]int, error) {
 }
 
 // ReadFile reads the content of a file
-func ReadFile(filename string) (string, error) {
-	content, err := os.ReadFile(filename)
+func ReadFile(filename string) (io.Reader, error) {
+	file, err := os.Open(filename)
 	if err != nil {
-		return "", fmt.Errorf("error reading file: %w", err)
+		return nil, fmt.Errorf("error opening file: %w", err)
 	}
-	return string(content), nil
+	return file, nil
 }
+
+var (
+	ErrInvalidFieldSpec = fmt.Errorf("invalid field specification")
+	ErrInvalidByteSpec  = fmt.Errorf("invalid byte specification")
+)
