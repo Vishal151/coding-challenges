@@ -11,6 +11,7 @@ import (
 var fields string
 var bytes string
 var delimiter string
+var onlyDelimited bool
 
 var rootCmd = &cobra.Command{
 	Use:   "cut-tool [file]",
@@ -27,7 +28,7 @@ var rootCmd = &cobra.Command{
 
 		var result string
 		if fields != "" {
-			result, err = cutter.CutByFields(content, fields, delimiter)
+			result, err = cutter.CutByFields(content, fields, delimiter, onlyDelimited)
 		} else if bytes != "" {
 			result, err = cutter.CutByBytes(content, bytes)
 		} else {
@@ -55,4 +56,5 @@ func init() {
 	rootCmd.Flags().StringVarP(&fields, "fields", "f", "", "select only these fields; also print any line that contains no delimiter character, unless the -s option is specified")
 	rootCmd.Flags().StringVarP(&bytes, "bytes", "b", "", "select only these bytes")
 	rootCmd.Flags().StringVarP(&delimiter, "delimiter", "d", "\t", "use DELIM instead of TAB for field delimiter")
+	rootCmd.Flags().BoolVarP(&onlyDelimited, "only-delimited", "s", false, "do not print lines not containing delimiters")
 }

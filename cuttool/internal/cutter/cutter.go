@@ -11,7 +11,7 @@ import (
 
 // CutByFields cuts the input by fields
 // Step 2: Implement cutting by fields, including ranges and lists
-func CutByFields(input string, fieldSpec string, delimiter string) (string, error) {
+func CutByFields(input string, fieldSpec string, delimiter string, onlyDelimited bool) (string, error) {
 	scanner := bufio.NewScanner(strings.NewReader(input))
 	var result strings.Builder
 
@@ -22,6 +22,9 @@ func CutByFields(input string, fieldSpec string, delimiter string) (string, erro
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if onlyDelimited && !strings.Contains(line, delimiter) {
+			continue
+		}
 		parts := strings.Split(line, delimiter)
 		var selectedParts []string
 

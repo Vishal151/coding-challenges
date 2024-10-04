@@ -8,12 +8,13 @@ import (
 
 func TestCutByFields(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		fieldSpec string
-		delimiter string
-		expected  string
-		wantErr   bool
+		name          string
+		input         string
+		fieldSpec     string
+		delimiter     string
+		onlyDelimited bool
+		expected      string
+		wantErr       bool
 	}{
 		{
 			name:      "Basic case",
@@ -95,11 +96,38 @@ func TestCutByFields(t *testing.T) {
 			expected:  "",
 			wantErr:   true,
 		},
+		{
+			name:          "Only delimited - with delimiter",
+			input:         "a,b,c\nd:e:f\ng,h,i",
+			fieldSpec:     "1,3",
+			delimiter:     ",",
+			onlyDelimited: true,
+			expected:      "a,c\ng,i\n",
+			wantErr:       false,
+		},
+		{
+			name:          "Only delimited - without delimiter",
+			input:         "a,b,c\nd:e:f\ng,h,i",
+			fieldSpec:     "1,3",
+			delimiter:     ":",
+			onlyDelimited: true,
+			expected:      "d:f\n",
+			wantErr:       false,
+		},
+		{
+			name:          "Only delimited - no matching lines",
+			input:         "a,b,c\nd:e:f\ng,h,i",
+			fieldSpec:     "1,3",
+			delimiter:     "|",
+			onlyDelimited: true,
+			expected:      "",
+			wantErr:       false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := CutByFields(tt.input, tt.fieldSpec, tt.delimiter)
+			result, err := CutByFields(tt.input, tt.fieldSpec, tt.delimiter, tt.onlyDelimited)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CutByFields() error = %v, wantErr %v", err, tt.wantErr)
 				return
