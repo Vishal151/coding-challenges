@@ -7,29 +7,71 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sync"
+	"time"
 )
 
+type Backend struct {
+	URL     *url.URL
+	Healthy bool
+	mux     sync.RWMutex
+}
+
 type LoadBalancer struct {
-	backends []*url.URL
+	backends []*Backend
 	mutex    sync.Mutex
 	current  int
 }
 
 func NewLoadBalancer(backends []string) *LoadBalancer {
-	var urls []*url.URL
+	var be []*Backend
 	for _, backend := range backends {
 		url, _ := url.Parse(backend)
-		urls = append(urls, url)
+		be = append(be, &Backend{URL: url, Healthy: true})
 	}
-	return &LoadBalancer{backends: urls}
+	return &LoadBalancer{backends: be}
 }
 
-func (lb *LoadBalancer) NextBackend() *url.URL {
+func (b *Backend) SetHealth(health bool) {
+	b.mux.Lock()
+	b.Healthy = health
+	b.mux.Unlock()
+}
+
+func (b *Backend) IsHealthy() bool {
+	b.mux.RLock()
+	defer b.mux.RUnlock()
+	return b.Healthy
+}
+
+func (lb *LoadBalancer) NextBackend() *Backend {
 	lb.mutex.Lock()
 	defer lb.mutex.Unlock()
-	backend := lb.backends[lb.current]
-	lb.current = (lb.current + 1) % len(lb.backends)
-	return backend
+
+	for i := 0; i < len(lb.backends); i++ {
+		lb.current = (lb.current + 1) % len(lb.backends)
+		if lb.backends[lb.current].IsHealthy() {
+			return lb.backends[lb.current]
+		}
+	}
+	return nil
+}
+
+func (lb *LoadBalancer) HealthCheck() {
+	for _, backend := range lb.backends {
+		go func(b *Backend) {
+			for {
+				resp, err := http.Get(b.URL.String() + "/health")
+				if err != nil || resp.StatusCode != http.StatusOK {
+					b.SetHealth(false)
+					log.Printf("Backend %v is unhealthy\n", b.URL)
+				} else {
+					b.SetHealth(true)
+					log.Printf("Backend %v is healthy\n", b.URL)
+				}
+				time.Sleep(5 * time.Second)
+			}
+		}(backend)
+	}
 }
 
 func main() {
@@ -38,16 +80,22 @@ func main() {
 		"http://localhost:8082",
 	})
 
+	go lb.HealthCheck()
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		dump, _ := httputil.DumpRequest(r, false)
 		fmt.Printf("Received request from %s\n%s\n", r.RemoteAddr, string(dump))
 
 		backend := lb.NextBackend()
-		proxy := httputil.NewSingleHostReverseProxy(backend)
+		if backend == nil {
+			http.Error(w, "No healthy backends available", http.StatusServiceUnavailable)
+			return
+		}
 
+		proxy := httputil.NewSingleHostReverseProxy(backend.URL)
 		proxy.ServeHTTP(w, r)
 
-		fmt.Printf("Request forwarded to backend server: %s\n\n", backend)
+		fmt.Printf("Request forwarded to backend server: %s\n\n", backend.URL)
 	})
 
 	log.Println("Starting load balancer on :8080")

@@ -23,6 +23,11 @@ func main() {
 		fmt.Printf("Replied with a hello message from port %s\n", port)
 	})
 
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "OK")
+	})
+
 	log.Printf("Starting backend server on :%s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
