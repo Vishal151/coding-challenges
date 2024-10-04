@@ -9,6 +9,7 @@ import (
 )
 
 var fields string
+var bytes string
 var delimiter string
 
 var rootCmd = &cobra.Command{
@@ -24,9 +25,18 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		result, err := cutter.CutByFields(content, fields, delimiter)
+		var result string
+		if fields != "" {
+			result, err = cutter.CutByFields(content, fields, delimiter)
+		} else if bytes != "" {
+			result, err = cutter.CutByBytes(content, bytes)
+		} else {
+			fmt.Println("Error: either -f or -b flag must be specified")
+			os.Exit(1)
+		}
+
 		if err != nil {
-			fmt.Println("Error cutting fields:", err)
+			fmt.Println("Error cutting content:", err)
 			os.Exit(1)
 		}
 
@@ -43,6 +53,6 @@ func Execute() {
 
 func init() {
 	rootCmd.Flags().StringVarP(&fields, "fields", "f", "", "select only these fields; also print any line that contains no delimiter character, unless the -s option is specified")
+	rootCmd.Flags().StringVarP(&bytes, "bytes", "b", "", "select only these bytes")
 	rootCmd.Flags().StringVarP(&delimiter, "delimiter", "d", "\t", "use DELIM instead of TAB for field delimiter")
-	rootCmd.MarkFlagRequired("fields")
 }
