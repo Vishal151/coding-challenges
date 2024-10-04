@@ -1,0 +1,15 @@
+version: '3'
+services:
+  loadbalancer:
+    build: .
+    ports:
+      - "8080:8080"
+    command: ["./lb"]
+
+  backend1:
+    build: .
+    command: ["./be", "8081"]
+
+  backend2:
+    build: .
+    command: ["./be", "8082"]
