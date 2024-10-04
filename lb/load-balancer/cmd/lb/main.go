@@ -8,72 +8,90 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/vishal151/load-balancer/internal/balancer"
 )
 
-type Backend struct {
-	URL     *url.URL
-	Healthy bool
-	mux     sync.RWMutex
-}
-
 type LoadBalancer struct {
-	backends []*Backend
-	mutex    sync.Mutex
-	current  int
+	backends  []*balancer.Backend
+	algorithm balancer.Algorithm
 }
 
-func NewLoadBalancer(backends []string) *LoadBalancer {
-	var be []*Backend
+var (
+	requestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "Total number of HTTP requests",
+		},
+		[]string{"backend"},
+	)
+	requestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "Duration of HTTP requests",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"backend"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(requestsTotal)
+	prometheus.MustRegister(requestDuration)
+}
+
+func NewLoadBalancer(backends []string, algo string) *LoadBalancer {
+	var be []*balancer.Backend
 	for _, backend := range backends {
 		url, _ := url.Parse(backend)
-		be = append(be, &Backend{URL: url, Healthy: true})
+		be = append(be, &balancer.Backend{URL: url, Healthy: true})
 	}
-	return &LoadBalancer{backends: be, current: -1}
-}
 
-func (b *Backend) SetHealth(health bool) {
-	b.mux.Lock()
-	b.Healthy = health
-	b.mux.Unlock()
-}
-
-func (b *Backend) IsHealthy() bool {
-	b.mux.RLock()
-	defer b.mux.RUnlock()
-	return b.Healthy
-}
-
-func (lb *LoadBalancer) NextBackend() *Backend {
-	lb.mutex.Lock()
-	defer lb.mutex.Unlock()
-
-	for i := 0; i < len(lb.backends); i++ {
-		lb.current = (lb.current + 1) % len(lb.backends)
-		if lb.backends[lb.current].IsHealthy() {
-			return lb.backends[lb.current]
-		}
+	var algorithm balancer.Algorithm
+	switch algo {
+	case "round-robin":
+		algorithm = balancer.NewRoundRobin()
+	case "least-connections":
+		algorithm = &balancer.LeastConnections{}
+	case "ip-hash":
+		algorithm = &balancer.IPHash{}
+	default:
+		algorithm = balancer.NewRoundRobin()
 	}
-	return nil
+
+	return &LoadBalancer{backends: be, algorithm: algorithm}
+}
+
+func (lb *LoadBalancer) NextBackend() *balancer.Backend {
+	return lb.algorithm.NextBackend(lb.backends)
 }
 
 func (lb *LoadBalancer) HealthCheck() {
-	for _, backend := range lb.backends {
-		go func(b *Backend) {
-			for {
-				resp, err := http.Get(b.URL.String() + "/health")
-				if err != nil || resp.StatusCode != http.StatusOK {
-					b.SetHealth(false)
-					log.Printf("Backend %v is unhealthy\n", b.URL)
-				} else {
-					b.SetHealth(true)
-					log.Printf("Backend %v is healthy\n", b.URL)
-				}
-				time.Sleep(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
+	for range ticker.C {
+		for _, backend := range lb.backends {
+			status := "up"
+			alive := isBackendAlive(backend.URL)
+			backend.SetHealth(alive)
+			if !alive {
+				status = "down"
 			}
-		}(backend)
+			log.Printf("Backend %s health check: %s\n", backend.URL, status)
+		}
 	}
+}
+
+func isBackendAlive(u *url.URL) bool {
+	resp, err := http.Head(u.String() + "/health")
+	if err != nil {
+		log.Printf("Health check error for %s: %v\n", u, err)
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 func main() {
@@ -85,7 +103,28 @@ func main() {
 		}
 	}
 
-	lb := NewLoadBalancer(backendURLs)
+	// Ensure all backend URLs have a scheme and host
+	var validBackendURLs []string
+	for _, backendURL := range backendURLs {
+		if backendURL == "" {
+			continue
+		}
+		if !strings.HasPrefix(backendURL, "http://") && !strings.HasPrefix(backendURL, "https://") {
+			backendURL = "http://" + backendURL
+		}
+		parsedURL, err := url.Parse(backendURL)
+		if err != nil || parsedURL.Host == "" {
+			log.Printf("Invalid backend URL: %s, skipping", backendURL)
+			continue
+		}
+		validBackendURLs = append(validBackendURLs, backendURL)
+	}
+
+	if len(validBackendURLs) == 0 {
+		log.Fatal("No valid backend URLs provided")
+	}
+
+	lb := NewLoadBalancer(validBackendURLs, "round-robin")
 
 	go lb.HealthCheck()
 
@@ -99,12 +138,32 @@ func main() {
 			return
 		}
 
+		start := time.Now()
 		proxy := httputil.NewSingleHostReverseProxy(backend.URL)
 		proxy.ServeHTTP(w, r)
+		duration := time.Since(start).Seconds()
+
+		requestsTotal.WithLabelValues(backend.URL.String()).Inc()
+		requestDuration.WithLabelValues(backend.URL.String()).Observe(duration)
 
 		fmt.Printf("Request forwarded to backend server: %s\n\n", backend.URL)
 	})
 
-	log.Println("Starting load balancer on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	// Add Prometheus metrics endpoint
+	http.Handle("/metrics", promhttp.Handler())
+
+	// Start HTTP server
+	go func() {
+		log.Println("Starting HTTP server on :8080")
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	// Start HTTPS server
+	log.Println("Starting HTTPS server on :8443")
+	err := http.ListenAndServeTLS(":8443", "server.crt", "server.key", nil)
+	if err != nil {
+		log.Fatalf("HTTPS server error: %v", err)
+	}
 }

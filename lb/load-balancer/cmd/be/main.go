@@ -24,6 +24,7 @@ func main() {
 	})
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Received health check from %s\n", r.RemoteAddr)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "OK")
 	})

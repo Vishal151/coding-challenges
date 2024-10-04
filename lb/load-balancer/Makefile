@@ -1,4 +1,4 @@
-.PHONY: build run-lb run-be test docker-build docker-run clean
+.PHONY: build run-lb run-be test docker-build docker-run clean generate-cert run-all
 
 build:
 	go build -o bin/lb cmd/lb/main.go
@@ -7,8 +7,22 @@ build:
 run-lb: build
 	./bin/lb
 
-run-be: build
-	./bin/be
+run-be1: build
+	./bin/be 8081
+
+run-be2: build
+	./bin/be 8082
+
+run-all: build
+	@echo "Stopping any running instances..."
+	-pkill -f "./bin/be" || true
+	-pkill -f "./bin/lb" || true
+	@echo "Starting backend servers..."
+	./bin/be 8081 & ./bin/be 8082 & 
+	@echo "Waiting for backends to start..."
+	sleep 2
+	@echo "Starting load balancer..."
+	BACKEND_URLS=http://localhost:8081,http://localhost:8082 ./bin/lb
 
 test:
 	go test ./...
@@ -21,3 +35,13 @@ docker-run:
 
 clean:
 	rm -rf bin
+	docker-compose down
+
+generate-cert:
+	openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
+
+build-loadtest:
+	go build -o bin/loadtest cmd/loadtest/main.go
+
+run-loadtest: build-loadtest
+	./bin/loadtest -url http://localhost:8080 -c 10 -n 1000
