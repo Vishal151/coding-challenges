@@ -7,22 +7,28 @@ import (
 )
 
 func TestLoadBalancer(t *testing.T) {
-	servers := []string{"http://server1", "http://server2"}
-	lb := NewLoadBalancer("8080", servers)
+	// Create mock servers
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Response from server 1"))
+	}))
+	defer server1.Close()
 
-	// Test round-robin behavior
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Response from server 2"))
+	}))
+	defer server2.Close()
+
+	lb := NewLoadBalancer("8080", []string{server1.URL, server2.URL})
+
+	// Test round-robin
 	for i := 0; i < 4; i++ {
-		req, err := http.NewRequest("GET", "/", nil)
-		if err != nil {
-			t.Fatal(err)
+		backend := lb.getNextServerURL()
+		expectedURL := server1.URL
+		if i%2 == 1 {
+			expectedURL = server2.URL
 		}
-
-		rr := httptest.NewRecorder()
-		lb.ServeHTTP(rr, req)
-
-		expectedServer := servers[i%len(servers)]
-		if lb.getNextServerURL().String() != expectedServer {
-			t.Errorf("Request %d: expected %s, got %s", i, expectedServer, lb.getNextServerURL().String())
+		if backend.String() != expectedURL {
+			t.Errorf("Request %d: expected %s, got %s", i, expectedURL, backend.String())
 		}
 	}
 }

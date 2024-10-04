@@ -3,8 +3,10 @@ services:
   loadbalancer:
     build: .
     ports:
-      - "8080:8080"
+      - "${LB_PORT:-8080}:8080"
     command: ["./lb"]
+    environment:
+      - BACKEND_URLS=http://backend1:8081,http://backend2:8082
 
   backend1:
     build: .

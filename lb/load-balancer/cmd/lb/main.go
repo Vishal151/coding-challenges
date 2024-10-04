@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,7 +30,7 @@ func NewLoadBalancer(backends []string) *LoadBalancer {
 		url, _ := url.Parse(backend)
 		be = append(be, &Backend{URL: url, Healthy: true})
 	}
-	return &LoadBalancer{backends: be}
+	return &LoadBalancer{backends: be, current: -1}
 }
 
 func (b *Backend) SetHealth(health bool) {
@@ -75,10 +77,15 @@ func (lb *LoadBalancer) HealthCheck() {
 }
 
 func main() {
-	lb := NewLoadBalancer([]string{
-		"http://localhost:8081",
-		"http://localhost:8082",
-	})
+	backendURLs := strings.Split(os.Getenv("BACKEND_URLS"), ",")
+	if len(backendURLs) == 0 {
+		backendURLs = []string{
+			"http://localhost:8081",
+			"http://localhost:8082",
+		}
+	}
+
+	lb := NewLoadBalancer(backendURLs)
 
 	go lb.HealthCheck()
 
