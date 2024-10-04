@@ -3,8 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/vishal151/cut-tool/internal/cutter"
@@ -26,13 +24,7 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fieldsList, err := parseFields(fields)
-		if err != nil {
-			fmt.Println("Error parsing fields:", err)
-			os.Exit(1)
-		}
-
-		result, err := cutter.CutByFields(content, fieldsList, delimiter)
+		result, err := cutter.CutByFields(content, fields, delimiter)
 		if err != nil {
 			fmt.Println("Error cutting fields:", err)
 			os.Exit(1)
@@ -50,22 +42,7 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.Flags().StringVarP(&fields, "fields", "f", "", "select only these fields")
+	rootCmd.Flags().StringVarP(&fields, "fields", "f", "", "select only these fields; also print any line that contains no delimiter character, unless the -s option is specified")
 	rootCmd.Flags().StringVarP(&delimiter, "delimiter", "d", "\t", "use DELIM instead of TAB for field delimiter")
 	rootCmd.MarkFlagRequired("fields")
-}
-
-func parseFields(fieldsStr string) ([]int, error) {
-	parts := strings.Split(fieldsStr, ",")
-	fields := make([]int, 0, len(parts))
-
-	for _, part := range parts {
-		field, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, fmt.Errorf("invalid field number: %s", part)
-		}
-		fields = append(fields, field)
-	}
-
-	return fields, nil
 }

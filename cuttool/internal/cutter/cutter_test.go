@@ -10,7 +10,7 @@ func TestCutByFields(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		fields    []int
+		fieldSpec string
 		delimiter string
 		expected  string
 		wantErr   bool
@@ -18,7 +18,7 @@ func TestCutByFields(t *testing.T) {
 		{
 			name:      "Basic case",
 			input:     "a,b,c\nd,e,f\ng,h,i",
-			fields:    []int{1, 3},
+			fieldSpec: "1,3",
 			delimiter: ",",
 			expected:  "a,c\nd,f\ng,i\n",
 			wantErr:   false,
@@ -26,7 +26,7 @@ func TestCutByFields(t *testing.T) {
 		{
 			name:      "Single field",
 			input:     "a,b,c\nd,e,f\ng,h,i",
-			fields:    []int{2},
+			fieldSpec: "2",
 			delimiter: ",",
 			expected:  "b\ne\nh\n",
 			wantErr:   false,
@@ -34,7 +34,7 @@ func TestCutByFields(t *testing.T) {
 		{
 			name:      "Out of range field",
 			input:     "a,b,c\nd,e,f\ng,h,i",
-			fields:    []int{1, 4},
+			fieldSpec: "1,4",
 			delimiter: ",",
 			expected:  "a\nd\ng\n",
 			wantErr:   false,
@@ -42,7 +42,7 @@ func TestCutByFields(t *testing.T) {
 		{
 			name:      "Custom delimiter",
 			input:     "a:b:c\nd:e:f\ng:h:i",
-			fields:    []int{1, 3},
+			fieldSpec: "1,3",
 			delimiter: ":",
 			expected:  "a:c\nd:f\ng:i\n",
 			wantErr:   false,
@@ -50,16 +50,56 @@ func TestCutByFields(t *testing.T) {
 		{
 			name:      "Empty input",
 			input:     "",
-			fields:    []int{1},
+			fieldSpec: "1",
 			delimiter: ",",
 			expected:  "",
 			wantErr:   false,
+		},
+		{
+			name:      "Field range",
+			input:     "a,b,c,d,e\n1,2,3,4,5",
+			fieldSpec: "2-4",
+			delimiter: ",",
+			expected:  "b,c,d\n2,3,4\n",
+			wantErr:   false,
+		},
+		{
+			name:      "Field range and single field",
+			input:     "a,b,c,d,e\n1,2,3,4,5",
+			fieldSpec: "1,3-5",
+			delimiter: ",",
+			expected:  "a,c,d,e\n1,3,4,5\n",
+			wantErr:   false,
+		},
+		{
+			name:      "Overlapping ranges",
+			input:     "a,b,c,d,e\n1,2,3,4,5",
+			fieldSpec: "1-3,2-4",
+			delimiter: ",",
+			expected:  "a,b,c,d\n1,2,3,4\n",
+			wantErr:   false,
+		},
+		{
+			name:      "Invalid field spec",
+			input:     "a,b,c\n1,2,3",
+			fieldSpec: "1,a",
+			delimiter: ",",
+			expected:  "",
+			wantErr:   true,
+		},
+		{
+			name:      "Invalid range spec",
+			input:     "a,b,c\n1,2,3",
+			fieldSpec: "1-3-5",
+			delimiter: ",",
+			expected:  "",
+			wantErr:   true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := CutByFields(tt.input, tt.fields, tt.delimiter)
+			result, err := CutByFields(tt.input, tt.fieldSpec, tt.delimiter)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CutByFields() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -131,5 +171,36 @@ func TestReadFile_NonExistentFile(t *testing.T) {
 	_, err := ReadFile("non_existent_file.txt")
 	if err == nil {
 		t.Error("ReadFile() expected an error for non-existent file, but got nil")
+	}
+}
+
+func TestParseFieldSpec(t *testing.T) {
+	tests := []struct {
+		name      string
+		fieldSpec string
+		expected  []int
+		wantErr   bool
+	}{
+		{"Single field", "3", []int{3}, false},
+		{"Multiple fields", "1,3,5", []int{1, 3, 5}, false},
+		{"Range", "2-5", []int{2, 3, 4, 5}, false},
+		{"Mixed", "1,3-5,7", []int{1, 3, 4, 5, 7}, false},
+		{"Overlapping", "1-3,2-4", []int{1, 2, 3, 4}, false},
+		{"Unsorted", "5,1,3", []int{1, 3, 5}, false},
+		{"Invalid field", "a", nil, true},
+		{"Invalid range", "1-3-5", nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseFieldSpec(tt.fieldSpec)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseFieldSpec() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("parseFieldSpec() = %v, want %v", result, tt.expected)
+			}
+		})
 	}
 }
